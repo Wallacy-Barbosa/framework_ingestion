@@ -9,67 +9,104 @@ import util.CommonUtil._
 
 object ranqueamento extends App {
 
-    stepDesc = "Validando preenchimento dos parametros"
+    // TODO: Include logs and test ranking
+
+    println("--------------------------------------------------")
+    stepDesc = "Validando preenchimento dos parâmetros"
     println(stepDesc)
+    println("--------------------------------------------------")
+    println(" ")
 
-    //Check if the parameters were entered correctly
+    //Checks if the parameters were entered correctly
 
+    // Initializing variables
     var errorMessage: String = ""
-    val tableName: String = args(0).toLowerCase
-    val partitionTable: String = args(1).toLowerCase
+    var databaseName: String = ""
+    var tableName: String = ""
+    var partitionTable: String = ""
+    var partitionFields: List[String] = List("")
+    var sortingFields: List[String] = List("")
+    var sortingType: String = ""
 
-    // TODO: Check if the split is correct
-    val partitionFields: List[String] = args(2).split(",").toList.map(_.trim.toLowerCase)
-    val ordenationFields: List[String] = args(3).split(",").toList.map(_.trim.toLowerCase)
-    val ordenationType: String = args(4).toLowerCase
+    println("--------------------------------------------------")
+    println(" ")
 
+    // Getting parameters by name
+
+    for (arg <- args) {
+
+        val lowerArg = arg.toLowerCase()
+
+        if (lowerArg.contains("database_name") && lowerArg.split("=").length == 2) databaseName = lowerArg.split("=")(1).trim()
+        if (lowerArg.contains("table_name") && lowerArg.split("=").length == 2) tableName = lowerArg.split("=")(1).trim()
+        if (lowerArg.contains("partition_table") && lowerArg.split("=").length == 2) partitionTable = lowerArg.split("=")(1).trim()
+
+        if (lowerArg.contains("partition_fields") && lowerArg.split("=").length == 2) {
+            if (lowerArg.split("=")(1).split(",").length > 0) {
+                partitionFields = lowerArg.split("=")(1).split(",").toList.map(_.trim())
+            }
+        }
+
+        if (lowerArg.contains("sorting_fields") && lowerArg.split("=").length == 2) {
+            if (lowerArg.split("=")(1).split(",").length > 0) {
+                sortingFields = lowerArg.split("=")(1).split(",").toList.map(_.trim())
+            }
+        }
+
+        if (lowerArg.contains("sorting_type") && lowerArg.split("=").length == 2) {
+            if (List("asc", "desc").contains(lowerArg.split("=")(1))) {
+                sortingType = lowerArg.split("=")(1).trim()
+            }
+        }
+    }
+
+    //Check that all parameters have been entered
+
+    if (databaseName.isEmpty) errorMessage = "O Parâmetro databaseName está vazio."
     if (tableName.isEmpty) errorMessage = "O Parâmetro tableName está vazio."
     if (partitionTable.isEmpty) errorMessage = "O Parâmetro partitionTable está vazio."
 
-    // TODO: Check if isEmpty works in a list type variable
-    if (partitionFields.isEmpty) errorMessage = "O Parâmetro partitionFields está vazio."
-    if (ordenationFields.isEmpty) errorMessage = "O Parâmetro ordenationFields está vazio."
-    if (ordenationType.isEmpty || !List("asc", "desc").contains(ordenationType))
-        errorMessage = "O Parâmetro ordenationType deve ser preenchido com asc ou desc."
+    if (partitionFields(0).isEmpty) errorMessage = "O Parâmetro partitionFields está vazio."
+    if (sortingFields(0).isEmpty) errorMessage = "O Parâmetro sortingFields está vazio."
+
+    if (sortingType.isEmpty) errorMessage = "O Parâmetro sortingType deve ser preenchido com asc ou desc."
 
     // Throw exception if something wrong with parameters
-    if (errorMessage.nonEmpty) throw new Exception ("Erro ao importar parâmetros: " + errorMessage)
+    if (errorMessage.nonEmpty) throw new Exception ("ERRO: " + errorMessage)
 
-    stepDesc = "Parâmetros validado com sucesso"
+    stepDesc = "Parâmetros validados com sucesso"
     println(stepDesc)
 
     stepDesc = "Iniciando Ranqueamento da tabela: " + tableName
     println(stepDesc)
 
     // Creating the SparkSession
-    val sparkSession: SparkSession = createSparkSession(sizePerFile)
+    val sparkSession:SparkSession = createSparkSession(sizePerFile)
 
-    val schema = StructType(
-        StructField("id", StringType, nullable = true) ::
-          StructField("cpf", StringType, nullable = true) ::
-          StructField("nome", StringType, nullable = true) ::
-          StructField("data_nascimento", StringType, nullable = true) :: Nil
-    )
+    var dataFrame:DataFrame = sparkSession.read.table(databaseName + "." + tableName)
 
-    var dataFrame: DataFrame = sparkSession.createDataFrame(sparkSession.emptyDataFrame.toJavaRDD, schema)
+    //Sort by oldest record
+    if (sortingType == "asc")
+        dataFrame = dataFrame.withColumn("row_number", row_number().over(Window.partitionBy(partitionFields.map(col):_*).orderBy(sortingFields.map(col):_*)))
 
-    if (ordenationType == "asc")
-        dataFrame = dataFrame.withColumn("row_number", row_number().over(Window.partitionBy(partitionFields.map(col):_*).orderBy(ordenationFields.map(col):_*)))
+    //Sort by most recent record
+    if (sortingType == "desc")
+        dataFrame = dataFrame.withColumn("row_number", row_number().over(Window.partitionBy(partitionFields.map(col(_)):_*).orderBy(sortingFields.map(col(_).desc):_*)))
 
-    if (ordenationType == "desc")
-        dataFrame = dataFrame.withColumn("row_number", row_number().over(Window.partitionBy(partitionFields.map(col(_)):_*).orderBy(ordenationFields.map(col(_).desc):_*)))
-
-    val dataFrameRanked: DataFrame = dataFrame.filter(col("row_number") === 1).drop(col("row_number"))
+    val dataFrameRanked:DataFrame = dataFrame.filter(col("row_number") === 1).drop(col("row_number"))
 
     dataFrameRanked.
       write.
-      partitionBy("reference_date").
+      partitionBy(partitionTable).
       format("parquet").
       option("compression", "snappy").
       mode("overwrite"). // TODO: Pending check table downtime
-      saveAsTable(tableName + "_rank")
+      saveAsTable(tableName + "_rank_wb")
 
     stepDesc = "Tabela ranqueada com sucesso"
     println(stepDesc)
+
+    //Closing the sparkSession
+    closeSparkSession(sparkSession)
 
 }
